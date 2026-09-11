@@ -41,11 +41,41 @@ def dec_and_print(ctxt, keys, openFheContext):
     print(res)
 
 def eval_sum_tree(context, ctxt, vector_size):
+    shift = 1
+
+    while shift < vector_size:
+        # create a rotate copy of the ciphertext
+        ctxt_rot = context.EvalAtIndex(ctxt, shift)
+
+        ctxt_in_func = context.EvalAdd(ctxt, ctxt_rot)         
+
+        # Doubles the shift
+        shift *=2
+
+    return ctxt_in_func
+
+def eval_single_neuron(context, ctxt_data, ctxt_weights, vector_size):
+    # Dot product
+    ctxt_mult = context.EvalMult(ctxt_data, ctxt_weights)
+
+    # Sum Tree
+    ctxt_sum_tree = eval_sum_tree(context, ctxt_mult, vector_size)
+
+    # Approximation of Sigmpid Function (-0.004*x^3 + 0.197*x + 0.5)
+    coefficients = [0.5, 0.197, 0.0, -0.004]
+
+    # Evaluate polynomial homomorphically
+    ctxt_activation = context.EvalPoly(ctxt_sum_tree, coefficients)
+    
+    return ctxt_activation
+
+def pack_data_for_layer(data, weights_matrix, num_neurons):
+    input_len = len(data)
     pass
 
 def main():
     # Instantiate the cryptographic context
-    cc = create_cripto_context(depth=2, batch_size=8)
+    cc = create_cripto_context(depth=4, batch_size=8)
 
     # Generate keys (public, private, and rotation/multiplication keys)
     keys = gen_keys(cc)
@@ -58,13 +88,26 @@ def main():
     ctxt_weights = enc(weights, cc, keys)
 
     # Homomorphic multiplication (data * weight)
-    print("Performing homomorphic element-wise multiplication...")
-    ctxt_mult = cc.EvalMult(ctxt_data, ctxt_weights)
+    # print("Performing homomorphic element-wise multiplication...")
+    # ctxt_mult = cc.EvalMult(ctxt_data, ctxt_weights)
 
     # Check multiplication
-    print("Multiplication result (input for the Sum Tree):")
-    dec_and_print(ctxt_mult, keys, cc)
+    # print("Multiplication result (input for the Sum Tree):")
+    # dec_and_print(ctxt_mult, keys, cc)
 
+    # Apply Sum Tree Function
+    # print("\nExecuting Sum Tree...")
+    # ctxt_sum_tree_res = eval_sum_tree(cc, ctxt_mult, len(data))
+
+    # print("Final Sum Tree result (Total sum is at index 0):")
+    # dec_and_print(ctxt_sum_tree_res, keys, cc)
+
+    # Single Neuron Test
+    print("Executing Single Neuron (Dot Product + Sigmoid Approximation)...")
+    ctxt_neuron_result = eval_single_neuron(cc, ctxt_data, ctxt_weights, len(data))
+    
+    print("Final Neuron Output (Result is at index 0):")
+    dec_and_print(ctxt_neuron_result, keys, cc)
 
 if __name__ == "__main__":
     main()
