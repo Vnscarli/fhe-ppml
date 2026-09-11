@@ -24,7 +24,7 @@ def gen_keys(context):
 
     return keys
 
-def data_weight():
+def get_data_weight():
     data = [0.5, 0.8, -0.2, 1.1, 3.0, 4.6, 0.6, 1]
     weights = [1.0, -1.0, 0.5, 2.0, 1.0, 1.5, 2.0, 1]
     
@@ -40,8 +40,31 @@ def dec_and_print(ctxt, keys, openFheContext):
     res = openFheContext.Decrypt(ctxt, keys.secretKey)
     print(res)
 
-def main():
+def eval_sum_tree(context, ctxt, vector_size):
     pass
+
+def main():
+    # Instantiate the cryptographic context
+    cc = create_cripto_context(depth=2, batch_size=8)
+
+    # Generate keys (public, private, and rotation/multiplication keys)
+    keys = gen_keys(cc)
+
+    # Load inputs and weights
+    data, weights = get_data_weight()
+
+    # Encrypt vectors
+    ctxt_data = enc(data, cc, keys)
+    ctxt_weights = enc(weights, cc, keys)
+
+    # Homomorphic multiplication (data * weight)
+    print("Performing homomorphic element-wise multiplication...")
+    ctxt_mult = cc.EvalMult(ctxt_data, ctxt_weights)
+
+    # Check multiplication
+    print("Multiplication result (input for the Sum Tree):")
+    dec_and_print(ctxt_mult, keys, cc)
+
 
 if __name__ == "__main__":
     main()
