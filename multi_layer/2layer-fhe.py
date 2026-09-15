@@ -105,3 +105,102 @@ def pack_weights_for_layer(weights_matrix):
         
     return packed_weights
 
+def repack_l1_to_l2(context, ctxt_l1_out, l1_block, num_l1_neurons, l2_block, num_l2_neurons, batch_size):
+    #Takes outputs from layer one and reorganize on layer 2
+    ctxt_dense = None
+    
+    for i in range(num_l1_neurons):
+        shift = (i * l1_block) - i
+        
+        ctxt_shifted = context.EvalAtIndex(ctxt_l1_out, shift) if shift > 0 else ctxt_l1_out
+        
+        # Create a mask to clear surrounding noise
+        mask = [0.0] * batch_size
+        mask[i] = 1.0
+        ptxt_mask = context.MakeCKKSPackedPlaintext(mask)
+        
+        ctxt_masked = context.EvalMult(ctxt_shifted, ptxt_mask)
+        
+        if ctxt_dense is None:
+            ctxt_dense = ctxt_masked
+        else:
+            ctxt_dense = context.EvalAdd(ctxt_dense, ctxt_masked)
+            
+    # Duplicate the clean block for each neuron at layer 2
+    ctxt_packed_l2 = ctxt_dense
+    for n in range(1, num_l2_neurons):
+        shift_right = -1 * l2_block * n
+        ctxt_dup = context.EvalAtIndex(ctxt_dense, shift_right)
+        ctxt_packed_l2 = context.EvalAdd(ctxt_packed_l2, ctxt_dup)
+        
+    return ctxt_packed_l2
+
+def calculate_cleartext_expected(data, weights_matrix):
+    expected_results = []
+    for weights in weights_matrix:
+        dot_product = sum(d * w for d, w in zip(data, weights))
+        activation = -0.004 * (dot_product ** 3) + 0.197 * dot_product + 0.5
+        expected_results.append((dot_product, activation))
+    return expected_results
+
+def main():
+    BATCH_SIZE = 32
+    cc = create_crypto_context(depth=10, batch_size=BATCH_SIZE)
+    keys = gen_keys(cc)
+
+    data, l1_weights, l2_weights = get_data_weight()
+
+
+    # Clear text operation
+    l1_expected = calculate_cleartext_expected(data, l1_weights) 
+
+    l1_activations = [res[1] for res in l1_expected]
+    l1_activations.append(0.0)
+
+    l2_expected = calculate_cleartext_expected(l1_activations, l2_weights)
+
+    # Layer 1
+    print("Executing Layer 1")
+    num_l1_neurons = len(l1_weights)
+
+    p_data_l1 = pack_data_for_layer(data, num_l1_neurons)
+    p_weights_l1 = pack_weights_for_layer(l1_weights)
+
+    ctxt_data_l1 = enc(p_data_l1, cc, keys)
+    ctxt_weights_l1 = enc(p_weights_l1, cc, keys)
+
+    ctxt_l1_out = eval_layer(cc, ctxt_data_l1, ctxt_weights_l1, block_size = 8)
+
+    # Repack (L1 -> L2)
+    print("Repacking encypted data for layer 2")
+    ctxt_data_l2 = repack_l1_to_l2(cc, ctxt_l1_out, 8, 3, 4, 3, BATCH_SIZE)
+
+    # Layer 2
+    print("Executing Layer 2")
+
+    p_weights_l2 = pack_weights_for_layer(l2_weights) 
+    ctxt_weights_l2 = enc(p_weights_l2, cc, keys)
+
+    ctxt_l2_out = eval_layer(cc, ctxt_data_l2, ctxt_weights_l2, block_size = 4)
+
+    # Decrypt and Compare
+    ptxt_res = cc.Decrypt(ctxt_l2_out, keys.secretKey)
+
+    ptxt_res.SetLength(len(l2_weights)*4)
+    res_array = ptxt_res.GetRealPackedValue()
+
+    for i in range(len(l2_weights)):
+        valid_index = i * 4 
+        val_fhe = res_array[valid_index]
+
+        dot_clear, val_clear = l2_expected[i]
+        error = abs(val_fhe - val_clear)
+
+        print(f"Neuron {i}:")
+        print(f"Raw dot product: {dot_clear:.4f}")
+        print(f"Expected Output: {val_clear:.8f}")
+        print(f"FHE Output: {val_fhe:.8f}")
+        print(f"Absolute error (noise): {error}")
+
+if __name__ == "__main__":
+    main()
