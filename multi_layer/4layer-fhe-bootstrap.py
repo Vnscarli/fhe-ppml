@@ -1,4 +1,5 @@
 import sys
+import time
 sys.path.append('/usr/local')
 
 import openfhe
@@ -175,15 +176,48 @@ def calculate_cleartext_expected(data, weights_matrix):
         expected_results.append((dot_product, activation))
     return expected_results
 
+def write_benchmark_report(filename, num_iterations, metrics):
+    avg_boot1 = sum(metrics["boot_1"]) / num_iterations
+    avg_boot2 = sum(metrics["boot_2"]) / num_iterations
+    avg_boot3 = sum(metrics["boot_3"]) / num_iterations
+    total_boot_time = avg_boot1 + avg_boot2 + avg_boot3
+    
+    avg_noise_0 = sum(metrics["noise_n0"]) / num_iterations
+    avg_noise_1 = sum(metrics["noise_n1"]) / num_iterations
+    avg_noise_2 = sum(metrics["noise_n2"]) / num_iterations
+    total_avg_noise = (avg_noise_0 + avg_noise_1 + avg_noise_2) / 3
+
+    with open(filename, "w") as f:
+        f.write("====================================================\n")
+        f.write("      BENCHMARK - FHE NEURAL NETWORK (4 LAYERS)     \n")
+        f.write("====================================================\n\n")
+        f.write(f"Total iterations executed: {num_iterations}\n\n")
+        
+        f.write("--- AVERAGE BOOTSTRAPPING TIMES ---\n")
+        f.write(f"Bootstrap 1 (After L1): {avg_boot1:.4f} seconds\n")
+        f.write(f"Bootstrap 2 (After L2): {avg_boot2:.4f} seconds\n")
+        f.write(f"Bootstrap 3 (After L3): {avg_boot3:.4f} seconds\n")
+        f.write(f"-> TOTAL AVERAGE BOOTSTRAP TIME PER INFERENCE: {total_boot_time:.4f} seconds\n\n")
+        
+        f.write("--- FINAL AVERAGE NOISE (Absolute Error in Layer 4) ---\n")
+        f.write(f"Neuron 0: {avg_noise_0}\n")
+        f.write(f"Neuron 1: {avg_noise_1}\n")
+        f.write(f"Neuron 2: {avg_noise_2}\n")
+        f.write(f"-> OVERALL NETWORK AVERAGE NOISE: {total_avg_noise}\n")
+
 def main():
     BATCH_SIZE = 32
+    NUM_ITERATIONS = 2
+    OUTPUT_FILE = "benchmark_results.txt"
+
     cc = create_crypto_context(batch_size=BATCH_SIZE)
     keys = gen_keys(cc, batch_size=BATCH_SIZE)
+    
 
     data, l1_w, l2_w, l3_w, l4_w = get_data_weight()
 
 
-    # Clear text operation
+    # Plain text operation
     expected_l1 = calculate_cleartext_expected(data, l1_w) 
     out_l1 = [res[1] for res in expected_l1] + [0.0]
 
@@ -195,79 +229,90 @@ def main():
 
     expected_l4 = calculate_cleartext_expected(out_l3, l4_w)
 
-    # Layer 1
-    print("Executing Layer 1")
-    p_data = pack_data_for_layer(data, len(l1_w))
-    ctxt_data = enc(p_data, cc, keys)
-    ctxt_w1 = enc(pack_weights_for_layer(l1_w), cc, keys)
-    
-    ctxt_out = eval_layer(cc, ctxt_data, ctxt_w1, block_size=8)
+    # Dictionary to store metrics for all iterations
+    metrics = {
+        "boot_1": [], "boot_2": [], "boot_3": [],
+        "noise_n0": [], "noise_n1": [], "noise_n2": []
+    }
 
-    # Repack (L1 -> L2)
-    print("Repacking encypted data for layer 2")
-    ctxt_out = repack_layer(cc, ctxt_out, 8, 3, 4, 3, BATCH_SIZE)
-    
+    # Inference Loop
 
-    # Bootstrapping
-    print(f"Starting Bootstrapping")
-    ctxt_out = cc.EvalBootstrap(ctxt_out)
-    print("Bootstrap finished!\n")
+    for it in range(1, NUM_ITERATIONS + 1):
+        print(f"\n==========================================")
+        print(f"       STARTING ITERATION {it}/{NUM_ITERATIONS}")
+        print(f"==========================================")
 
-    # Layer 2
-    print("Executing Layer 2")
-    ctxt_w2 = enc(pack_weights_for_layer(l2_w), cc, keys)
-    ctxt_out = eval_layer(cc, ctxt_out, ctxt_w2, block_size=4)
+        # Encrypting weights inside the loop 
+        ctxt_w1 = enc(pack_weights_for_layer(l1_w), cc, keys)
+        ctxt_w2 = enc(pack_weights_for_layer(l2_w), cc, keys)
+        ctxt_w3 = enc(pack_weights_for_layer(l3_w), cc, keys)
+        ctxt_w4 = enc(pack_weights_for_layer(l4_w), cc, keys)
 
-    # Repack 2 -> 3
-    print("Repacking encypted data for layer 3")
-    ctxt_out = repack_layer(cc, ctxt_out, 4, 3, 4, 3, BATCH_SIZE)
+        # Encrypt data
+        p_data = pack_data_for_layer(data, len(l1_w))
+        ctxt_out = enc(p_data, cc, keys)
 
-    # Bootstrap
-    print(f"Starting Bootstrapping")
-    ctxt_out = cc.EvalBootstrap(ctxt_out)
-    print("Bootstrap finished!\n")
+        # Layer 1 -> Repack -> Bootstrap 1
+        print("Executing Layer 1 and Repacking...")
+        ctxt_out = eval_layer(cc, ctxt_out, ctxt_w1, block_size=8)
+        ctxt_out = repack_layer(cc, ctxt_out, 8, 3, 4, 3, BATCH_SIZE)
+        
+        print("Starting Bootstrapping 1...")
+        t0 = time.time()
+        ctxt_out = cc.EvalBootstrap(ctxt_out)
+        t1 = time.time()
+        metrics["boot_1"].append(t1 - t0)
 
-    # Layer 3
-    print("Executing Layer 3")
-    ctxt_w3 = enc(pack_weights_for_layer(l3_w), cc, keys)
-    ctxt_out = eval_layer(cc, ctxt_out, ctxt_w3, block_size=4)
+        # Layer 2 -> Repack -> Bootstrap 2
+        print("Executing Layer 2 and Repacking...")
+        ctxt_out = eval_layer(cc, ctxt_out, ctxt_w2, block_size=4)
+        ctxt_out = repack_layer(cc, ctxt_out, 4, 3, 4, 3, BATCH_SIZE)
 
-    # Repack 3 -> 4
-    print("Repacking encypted data for layer 4")
-    ctxt_out = repack_layer(cc, ctxt_out, 4, 3, 4, 3, BATCH_SIZE)
+        print("Starting Bootstrapping 2...")
+        t0 = time.time()
+        ctxt_out = cc.EvalBootstrap(ctxt_out)
+        t1 = time.time()
+        metrics["boot_2"].append(t1 - t0)
 
-    # Bootstrap
-    print(f"Starting Bootstrapping")
-    ctxt_out = cc.EvalBootstrap(ctxt_out)
-    print("Bootstrap finished!\n")
+        # Layer 3 -> Repack -> Bootstrap 3
+        print("Executing Layer 3 and Repacking...")
+        ctxt_out = eval_layer(cc, ctxt_out, ctxt_w3, block_size=4)
+        ctxt_out = repack_layer(cc, ctxt_out, 4, 3, 4, 3, BATCH_SIZE) # L3 -> L4 (3 neurons)
 
-    # Layer 4
-    print("Executing Layer 4")
-    ctxt_w4 = enc(pack_weights_for_layer(l4_w), cc, keys)
+        print("Starting Bootstrapping 3...")
+        t0 = time.time()
+        ctxt_out = cc.EvalBootstrap(ctxt_out)
+        t1 = time.time()
+        metrics["boot_3"].append(t1 - t0)
 
-    # Evaluate layer 4
-    ctxt_out = eval_layer(cc, ctxt_out, ctxt_w4, block_size=4)
+        # Layer 4 (Final)
+        print("Executing Layer 4...")
+        ctxt_out = eval_layer(cc, ctxt_out, ctxt_w4, block_size=4)
 
-    # Decrypt and Compare
-    (print(f"Decrypting and Comparing results: \n"))
-    ptxt_res = cc.Decrypt(ctxt_out, keys.secretKey)
+        # Decrypt and Track Noise
+        ptxt_res = cc.Decrypt(ctxt_out, keys.secretKey)
+        ptxt_res.SetLength(len(l4_w) * 4)
+        res_array = ptxt_res.GetRealPackedValue()
 
-    ptxt_res.SetLength(len(l4_w)*4)
-    res_array = ptxt_res.GetRealPackedValue()
+        for i in range(len(l4_w)):
+            valid_index = i * 4 
+            val_fhe = res_array[valid_index]
+            dot_clear, val_clear = expected_l4[i]
+            error = abs(val_fhe - val_clear)
+            
+            # Store noise in metrics
+            metrics[f"noise_n{i}"].append(error)
 
-    for i in range(len(l4_w)):
-        valid_index = i * 4 
-        val_fhe = res_array[valid_index]
-
-        dot_clear, val_clear = expected_l4[i]
-        error = abs(val_fhe - val_clear)
-
-        print(f"Neuron {i}:")
-        print(f"Raw dot product: {dot_clear:.8f}")
-        print(f"Expected Output: {val_clear:.8f}")
-        print(f"FHE Output: {val_fhe:.8f}")
-        print(f"Absolute error (noise): {error}")
-
+            print(f"Neuron {i}:")
+            print(f"Raw dot product: {dot_clear}")
+            print(f"Expected Output: {val_clear}")
+            print(f"FHE Output: {val_fhe}")
+            print(f"Absolute error (noise): {error}\n")
+            
+        print(f"Iteration {it} finished!")
+        # Outpu metrics in file
+    write_benchmark_report(OUTPUT_FILE, NUM_ITERATIONS, metrics)
+    print(f"\n[SUCCESS] Benchmark complete! Results saved in '{OUTPUT_FILE}'.")
 
 
 if __name__ == "__main__":
