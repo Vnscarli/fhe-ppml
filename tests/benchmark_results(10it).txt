@@ -1,0 +1,17 @@
+====================================================
+      BENCHMARK - FHE NEURAL NETWORK (4 LAYERS)     
+====================================================
+
+Total iterations executed: 10
+
+--- AVERAGE BOOTSTRAPPING TIMES ---
+Bootstrap 1 (After L1): 15.6793 seconds
+Bootstrap 2 (After L2): 14.9007 seconds
+Bootstrap 3 (After L3): 15.3713 seconds
+-> TOTAL AVERAGE BOOTSTRAP TIME PER INFERENCE: 45.9514 seconds
+
+--- FINAL AVERAGE NOISE (Absolute Error in Layer 4) ---
+Neuron 0: 1.730393606180769e-13
+Neuron 1: 1.5860646129794985e-13
+Neuron 2: 1.5037970868547745e-13
+-> OVERALL NETWORK AVERAGE NOISE: 1.6067517686716807e-13
