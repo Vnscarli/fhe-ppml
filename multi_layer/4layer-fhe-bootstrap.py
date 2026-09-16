@@ -207,7 +207,7 @@ def write_benchmark_report(filename, num_iterations, metrics):
 
 def main():
     BATCH_SIZE = 32
-    NUM_ITERATIONS = 2
+    NUM_ITERATIONS = 100
     OUTPUT_FILE = "benchmark_results.txt"
 
     cc = create_crypto_context(batch_size=BATCH_SIZE)
